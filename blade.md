@@ -59,7 +59,7 @@ Blade views may be returned from routes or controllers using the global `view` h
 <a name="supercharging-blade-with-livewire"></a>
 ### Supercharging Blade With Livewire
 
-Want to take your Blade templates to the next level and build dynamic interfaces with ease? Check out [Laravel Livewire](https://laravel-livewire.com). Livewire allows you to write Blade components that are augmented with dynamic functionality that would typically only be possible via frontend frameworks like React or Vue, providing a great approach to building modern, reactive frontends without the complexities, client-side rendering, or build steps of many JavaScript frameworks.
+Want to take your Blade templates to the next level and build dynamic interfaces with ease? Check out [Laravel Livewire](https://livewire.laravel.com). Livewire allows you to write Blade components that are augmented with dynamic functionality that would typically only be possible via frontend frameworks like React or Vue, providing a great approach to building modern, reactive frontends without the complexities, client-side rendering, or build steps of many JavaScript frameworks.
 
 <a name="displaying-data"></a>
 ## Displaying Data
@@ -88,7 +88,7 @@ The current UNIX timestamp is {{ time() }}.
 <a name="html-entity-encoding"></a>
 ### HTML Entity Encoding
 
-By default, Blade (and the Laravel `e` helper) will double encode HTML entities. If you would like to disable double encoding, call the `Blade::withoutDoubleEncoding` method from the `boot` method of your `AppServiceProvider`:
+By default, Blade (and the Laravel `e` function) will double encode HTML entities. If you would like to disable double encoding, call the `Blade::withoutDoubleEncoding` method from the `boot` method of your `AppServiceProvider`:
 
     <?php
 
@@ -299,6 +299,19 @@ You may use the `sectionMissing` directive to determine if a section does not ha
         @include('default-navigation')
     </div>
 @endif
+```
+
+<a name="session-directives"></a>
+#### Session Directives
+
+The `@session` directive may be used to determine if a [session](/docs/{{version}}/session) value exists. If the session value exists, the template contents within the `@session` and `@endsession` directives will be evaluated. Within the `@session` directive's contents, you may echo the `$value` variable to display the session value:
+
+```blade
+@session('status')
+    <div class="p-4 bg-green-100">
+        {{ $value }}
+    </div>
+@endsession
 ```
 
 <a name="switch-statements"></a>
@@ -610,10 +623,10 @@ In some situations, it's useful to embed PHP code into your views. You can use t
 @endphp
 ```
 
-If you only need to write a single PHP statement, you can include the statement within the `@php` directive:
+Or, if you only need to use PHP to import a class, you may use the `@use` directive:
 
 ```blade
-@php($counter = 1)
+@use('App\Models\Flight')
 ```
 
 <a name="comments"></a>
@@ -1051,6 +1064,22 @@ If you would like to check if an attribute is present on the component, you may 
 @endif
 ```
 
+If an array is passed to the `has` method, the method will determine if all of the given attributes are present on the component:
+
+```blade
+@if ($attributes->has(['name', 'class']))
+    <div>All of the attributes are present</div>
+@endif
+```
+
+The `hasAny` method may be used to determine if any of the given attributes are present on the component:
+
+```blade
+@if ($attributes->hasAny(['href', ':href', 'v-bind:href']))
+    <div>One of the attributes is present</div>
+@endif
+```
+
 You may retrieve a specific attribute's value using the `get` method:
 
 ```blade
@@ -1206,6 +1235,8 @@ php artisan make:component Alert --inline
 Sometimes you may need to render a component but not know which component should be rendered until runtime. In this situation, you may use Laravel's built-in `dynamic-component` component to render the component based on a runtime value or variable:
 
 ```blade
+// $componentName = "secondary-button";
+
 <x-dynamic-component :component="$componentName" class="mt-4" />
 ```
 

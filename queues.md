@@ -7,6 +7,7 @@
     - [Generating Job Classes](#generating-job-classes)
     - [Class Structure](#class-structure)
     - [Unique Jobs](#unique-jobs)
+    - [Encrypted Jobs](#encrypted-jobs)
 - [Job Middleware](#job-middleware)
     - [Rate Limiting](#rate-limiting)
     - [Preventing Job Overlaps](#preventing-job-overlaps)
@@ -22,11 +23,13 @@
 - [Job Batching](#job-batching)
     - [Defining Batchable Jobs](#defining-batchable-jobs)
     - [Dispatching Batches](#dispatching-batches)
+    - [Chains & Batches](#chains-and-batches)
     - [Adding Jobs To Batches](#adding-jobs-to-batches)
     - [Inspecting Batches](#inspecting-batches)
     - [Cancelling Batches](#cancelling-batches)
     - [Batch Failures](#batch-failures)
     - [Pruning Batches](#pruning-batches)
+    - [Storing Batches In DynamoDB](#storing-batches-in-dynamodb)
 - [Queueing Closures](#queueing-closures)
 - [Running The Queue Worker](#running-the-queue-worker)
     - [The `queue:work` Command](#the-queue-work-command)
@@ -105,6 +108,9 @@ Finally, don't forget to instruct your application to use the `database` driver 
 #### Redis
 
 In order to use the `redis` queue driver, you should configure a Redis database connection in your `config/database.php` configuration file.
+
+> **Warning**  
+> The `serializer` and `compression` Redis options are not supported by the `redis` queue driver.
 
 **Redis Cluster**
 
@@ -226,7 +232,9 @@ If you would like to take total control over how the container injects dependenc
 <a name="handling-relationships"></a>
 #### Queued Relationships
 
-Because loaded relationships also get serialized, the serialized job string can sometimes become quite large. To prevent relations from being serialized, you can call the `withoutRelations` method on the model when setting a property value. This method will return an instance of the model without its loaded relationships:
+Because all loaded Eloquent model relationships also get serialized when a job is queued, the serialized job string can sometimes become quite large. Furthermore, when a job is deserialized and model relationships are re-retrieved from the database, they will be retrieved in their entirety. Any previous relationship constraints that were applied before the model was serialized during the job queueing process will not be applied when the job is deserialized. Therefore, if you wish to work with a subset of a given relationship, you should re-constrain that relationship within your queued job.
+
+Or, to prevent relations from being serialized, you can call the `withoutRelations` method on the model when setting a property value. This method will return an instance of the model without its loaded relationships:
 
     /**
      * Create a new job instance.
@@ -236,7 +244,20 @@ Because loaded relationships also get serialized, the serialized job string can 
         $this->podcast = $podcast->withoutRelations();
     }
 
-Furthermore, when a job is deserialized and model relationships are re-retrieved from the database, they will be retrieved in their entirety. Any previous relationship constraints that were applied before the model was serialized during the job queueing process will not be applied when the job is deserialized. Therefore, if you wish to work with a subset of a given relationship, you should re-constrain that relationship within your queued job.
+If you are using PHP constructor property promotion and would like to indicate that an Eloquent model should not have its relations serialized, you may use the `WithoutRelations` attribute:
+
+    use Illuminate\Queue\Attributes\WithoutRelations;
+
+    /**
+     * Create a new job instance.
+     */
+    public function __construct(
+        #[WithoutRelations]
+        public Podcast $podcast
+    ) {
+    }
+
+If a job receives a collection or array of Eloquent models instead of a single model, the models within that collection will not have their relationships restored when the job is deserialized and executed. This is to prevent excessive resource usage on jobs that deal with large numbers of models.
 
 <a name="unique-jobs"></a>
 ### Unique Jobs
@@ -262,7 +283,7 @@ In certain cases, you may want to define a specific "key" that makes the job uni
 
     <?php
 
-    use App\Product;
+    use App\Models\Product;
     use Illuminate\Contracts\Queue\ShouldQueue;
     use Illuminate\Contracts\Queue\ShouldBeUnique;
 
@@ -283,7 +304,7 @@ In certain cases, you may want to define a specific "key" that makes the job uni
         public $uniqueFor = 3600;
 
         /**
-         * The unique ID of the job.
+         * Get the unique ID for the job.
          */
         public function uniqueId(): string
         {
@@ -303,7 +324,7 @@ By default, unique jobs are "unlocked" after a job completes processing or fails
 
     <?php
 
-    use App\Product;
+    use App\Models\Product;
     use Illuminate\Contracts\Queue\ShouldQueue;
     use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 
@@ -335,6 +356,21 @@ Behind the scenes, when a `ShouldBeUnique` job is dispatched, Laravel attempts t
 
 > **Note**  
 > If you only need to limit the concurrent processing of a job, use the [`WithoutOverlapping`](/docs/{{version}}/queues#preventing-job-overlaps) job middleware instead.
+
+<a name="encrypted-jobs"></a>
+### Encrypted Jobs
+
+Laravel allows you to ensure the privacy and integrity of a job's data via [encryption](/docs/{{version}}/encryption). To get started, simply add the `ShouldBeEncrypted` interface to the job class. Once this interface has been added to the class, Laravel will automatically encrypt your job before pushing it onto a queue:
+
+    <?php
+
+    use Illuminate\Contracts\Queue\ShouldBeEncrypted;
+    use Illuminate\Contracts\Queue\ShouldQueue;
+
+    class UpdateSearchIndex implements ShouldQueue, ShouldBeEncrypted
+    {
+        // ...
+    }
 
 <a name="job-middleware"></a>
 ## Job Middleware
@@ -381,7 +417,7 @@ Instead of rate limiting in the handle method, we could define a job middleware 
         {
             Redis::throttle('key')
                     ->block(0)->allow(1)->every(5)
-                    ->then(function () use (object $job, Closure $next) {
+                    ->then(function () use ($job, $next) {
                         // Lock obtained...
 
                         $next($job);
@@ -438,7 +474,7 @@ In the example above, we defined an hourly rate limit; however, you may easily d
 
     return Limit::perMinute(50)->by($job->user->id);
 
-Once you have defined your rate limit, you may attach the rate limiter to your backup job using the `Illuminate\Queue\Middleware\RateLimited` middleware. Each time the job exceeds the rate limit, this middleware will release the job back to the queue with an appropriate delay based on the rate limit duration.
+Once you have defined your rate limit, you may attach the rate limiter to your job using the `Illuminate\Queue\Middleware\RateLimited` middleware. Each time the job exceeds the rate limit, this middleware will release the job back to the queue with an appropriate delay based on the rate limit duration.
 
     use Illuminate\Queue\Middleware\RateLimited;
 
@@ -978,7 +1014,7 @@ One approach to specifying the maximum number of times a job may be attempted is
 php artisan queue:work --tries=3
 ```
 
-If a job exceeds its maximum number of attempts, it will be considered a "failed" job. For more information on handling failed jobs, consult the [failed job documentation](#dealing-with-failed-jobs). If `--tries=0` is provided to the `queue:work` command, the job will retried indefinitely.
+If a job exceeds its maximum number of attempts, it will be considered a "failed" job. For more information on handling failed jobs, consult the [failed job documentation](#dealing-with-failed-jobs). If `--tries=0` is provided to the `queue:work` command, the job will be retried indefinitely.
 
 You may take a more granular approach by defining the maximum number of times a job may be attempted on the job class itself. If the maximum number of attempts is specified on the job, it will take precedence over the `--tries` value provided on the command line:
 
@@ -994,6 +1030,16 @@ You may take a more granular approach by defining the maximum number of times a 
          * @var int
          */
         public $tries = 5;
+    }
+
+If you need dynamic control over a particular job's maximum attempts, you may define a `tries` method on the job:
+
+    /**
+     * Determine number of times the job may be attempted.
+     */
+    public function tries(): int
+    {
+        return 5;
     }
 
 <a name="time-based-attempts"></a>
@@ -1060,9 +1106,6 @@ In this example, the job is released for ten seconds if the application is unabl
 <a name="timeout"></a>
 #### Timeout
 
-> **Warning**  
-> The `pcntl` PHP extension must be installed in order to specify job timeouts.
-
 Often, you know roughly how long you expect your queued jobs to take. For this reason, Laravel allows you to specify a "timeout" value. By default, the timeout value is 60 seconds. If a job is processing for longer than the number of seconds specified by the timeout value, the worker processing the job will exit with an error. Typically, the worker will be restarted automatically by a [process manager configured on your server](#supervisor-configuration).
 
 The maximum number of seconds that jobs can run may be specified using the `--timeout` switch on the Artisan command line:
@@ -1090,6 +1133,9 @@ You may also define the maximum number of seconds a job should be allowed to run
     }
 
 Sometimes, IO blocking processes such as sockets or outgoing HTTP connections may not respect your specified timeout. Therefore, when using these features, you should always attempt to specify a timeout using their APIs as well. For example, when using Guzzle, you should always specify a connection and request timeout value.
+
+> **Warning**
+> The `pcntl` PHP extension must be installed in order to specify job timeouts. In addition, a job's "timeout" value should always be less than its ["retry after"](#job-expiration) value. Otherwise, the job may be re-attempted before it has actually finished executing or timed out.
 
 <a name="failing-on-timeout"></a>
 #### Failing On Timeout
@@ -1125,9 +1171,11 @@ Sometimes you may wish to manually release a job back onto the queue so that it 
         $this->release();
     }
 
-By default, the `release` method will release the job back onto the queue for immediate processing. However, by passing an integer to the `release` method you may instruct the queue to not make the job available for processing until a given number of seconds has elapsed:
+By default, the `release` method will release the job back onto the queue for immediate processing. However, you may instruct the queue to not make the job available for processing until a given number of seconds has elapsed by passing an integer or date instance to the `release` method:
 
     $this->release(10);
+
+    $this->release(now()->addSeconds(10));
 
 <a name="manually-failing-a-job"></a>
 #### Manually Failing A Job
@@ -1156,7 +1204,7 @@ If you would like to mark your job as failed because of an exception that you ha
 <a name="job-batching"></a>
 ## Job Batching
 
-Laravel's job batching feature allows you to easily execute a batch of jobs and then perform some action when the batch of jobs has completed executing. Before getting started, you should create a database migration to build a table to contain meta information about your job batches, such as their completion percentage. This migration may be generated using the `queue:batches-table` Artisan command:
+Laravel's job batching feature allows you to easily execute a batch of jobs and then perform some action when the batch of jobs has completed executing. Before getting started, you should create a database migration to build a table which will contain meta information about your job batches, such as their completion percentage. This migration may be generated using the `queue:batches-table` Artisan command:
 
 ```shell
 php artisan queue:batches-table
@@ -1215,7 +1263,9 @@ To dispatch a batch of jobs, you should use the `batch` method of the `Bus` faca
         new ImportCsv(201, 300),
         new ImportCsv(301, 400),
         new ImportCsv(401, 500),
-    ])->then(function (Batch $batch) {
+    ])->progress(function (Batch $batch) {
+        // A single job has completed successfully...
+    })->then(function (Batch $batch) {
         // All jobs completed successfully...
     })->catch(function (Batch $batch, Throwable $e) {
         // First batch job failure detected...
@@ -1252,8 +1302,8 @@ If you would like to specify the connection and queue that should be used for th
         // All jobs completed successfully...
     })->onConnection('redis')->onQueue('imports')->dispatch();
 
-<a name="chains-within-batches"></a>
-#### Chains Within Batches
+<a name="chains-and-batches"></a>
+### Chains & Batches
 
 You may define a set of [chained jobs](#job-chaining) within a batch by placing the chained jobs within an array. For example, we may execute two job chains in parallel and execute a callback when both job chains have finished processing:
 
@@ -1274,6 +1324,25 @@ You may define a set of [chained jobs](#job-chaining) within a batch by placing 
     ])->then(function (Batch $batch) {
         // ...
     })->dispatch();
+
+Conversely, you may run batches of jobs within a [chain](#job-chaining) by defining batches within the chain. For example, you could first run a batch of jobs to release multiple podcasts then a batch of jobs to send the release notifications:
+
+    use App\Jobs\FlushPodcastCache;
+    use App\Jobs\ReleasePodcast;
+    use App\Jobs\SendPodcastReleaseNotification;
+    use Illuminate\Support\Facades\Bus;
+
+    Bus::chain([
+        new FlushPodcastCache,
+        Bus::batch([
+            new ReleasePodcast(1),
+            new ReleasePodcast(2),
+        ]),
+        Bus::batch([
+            new SendPodcastReleaseNotification(1),
+            new SendPodcastReleaseNotification(2),
+        ]),
+    ])->dispatch();
 
 <a name="adding-jobs-to-batches"></a>
 ### Adding Jobs To Batches
@@ -1433,6 +1502,60 @@ Sometimes, your `jobs_batches` table may accumulate batch records for batches th
 Likewise, your `jobs_batches` table may also accumulate batch records for cancelled batches. You may instruct the `queue:prune-batches` command to prune these cancelled batch records using the `cancelled` option:
 
     $schedule->command('queue:prune-batches --hours=48 --cancelled=72')->daily();
+
+<a name="storing-batches-in-dynamodb"></a>
+### Storing Batches In DynamoDB
+
+Laravel also provides support for storing batch meta information in [DynamoDB](https://aws.amazon.com/dynamodb) instead of a relational database. However, you will need to manually create a DynamoDB table to store all of the batch records.
+
+Typically, this table should be named `job_batches`, but you should name the table based on the value of the `queue.batching.table` configuration value within your application's `queue` configuration file.
+
+<a name="dynamodb-batch-table-configuration"></a>
+#### DynamoDB Batch Table Configuration
+
+The `job_batches` table should have a string primary partition key named `application` and a string primary sort key named `id`. The `application` portion of the key will contain your application's name as defined by the `name` configuration value within your application's `app` configuration file. Since the application name is part of the DynamoDB table's key, you can use the same table to store job batches for multiple Laravel applications.
+
+In addition, you may define `ttl` attribute for your table if you would like to take advantage of [automatic batch pruning](#pruning-batches-in-dynamodb).
+
+<a name="dynamodb-configuration"></a>
+#### DynamoDB Configuration
+
+Next, install the AWS SDK so that your Laravel application can communicate with Amazon DynamoDB:
+
+```shell
+composer require aws/aws-sdk-php
+```
+
+Then, set the `queue.batching.driver` configuration option's value to `dynamodb`. In addition, you should define `key`, `secret`, and `region` configuration options within the `batching` configuration array. These options will be used to authenticate with AWS. When using the `dynamodb` driver, the `queue.batching.database` configuration option is unnecessary:
+
+```php
+'batching' => [
+    'driver' => env('QUEUE_FAILED_DRIVER', 'dynamodb'),
+    'key' => env('AWS_ACCESS_KEY_ID'),
+    'secret' => env('AWS_SECRET_ACCESS_KEY'),
+    'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
+    'table' => 'job_batches',
+],
+```
+
+<a name="pruning-batches-in-dynamodb"></a>
+#### Pruning Batches In DynamoDB
+
+When utilizing [DynamoDB](https://aws.amazon.com/dynamodb) to store job batch information, the typical pruning commands used to prune batches stored in a relational database will not work. Instead, you may utilize [DynamoDB's native TTL functionality](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html) to automatically remove records for old batches.
+
+If you defined your DynamoDB table with a `ttl` attribute, you may define configuration parameters to instruct Laravel how to prune batch records. The `queue.batching.ttl_attribute` configuration value defines the name of the attribute holding the TTL, while the `queue.batching.ttl` configuration value defines the number of seconds after which a batch record can be removed from the DynamoDB table, relative to the last time the record was updated:
+
+```php
+'batching' => [
+    'driver' => env('QUEUE_FAILED_DRIVER', 'dynamodb'),
+    'key' => env('AWS_ACCESS_KEY_ID'),
+    'secret' => env('AWS_SECRET_ACCESS_KEY'),
+    'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
+    'table' => 'job_batches',
+    'ttl_attribute' => 'ttl',
+    'ttl' => 60 * 60 * 24 * 7, // 7 days...
+],
+```
 
 <a name="queueing-closures"></a>
 ## Queueing Closures
@@ -1661,7 +1784,7 @@ sudo supervisorctl reread
 
 sudo supervisorctl update
 
-sudo supervisorctl start laravel-worker:*
+sudo supervisorctl start "laravel-worker:*"
 ```
 
 For more information on Supervisor, consult the [Supervisor documentation](http://supervisord.org/index.html).
@@ -1710,7 +1833,7 @@ If you require more complex logic for determining the job's backoff time, you ma
         return 3;
     }
 
-You may easily configure "exponential" backoffs by returning an array of backoff values from the `backoff` method. In this example, the retry delay will be 1 second for the first retry, 5 seconds for the second retry, and 10 seconds for the third retry:
+You may easily configure "exponential" backoffs by returning an array of backoff values from the `backoff` method. In this example, the retry delay will be 1 second for the first retry, 5 seconds for the second retry, 10 seconds for the third retry, and 10 seconds for every subsequent retry if there are more attempts remaining:
 
     /**
     * Calculate the number of seconds to wait before retrying the job.
@@ -1850,7 +1973,7 @@ php artisan queue:prune-failed --hours=48
 <a name="storing-failed-jobs-in-dynamodb"></a>
 ### Storing Failed Jobs In DynamoDB
 
-Laravel also provides support for storing your failed job records in [DynamoDB](https://aws.amazon.com/dynamodb) instead of a relational database table. However, you must create a DynamoDB table to store all of the failed job records. Typically, this table should be named `failed_jobs`, but you should name the table based on the value of the `queue.failed.table` configuration value within your application's `queue` configuration file.
+Laravel also provides support for storing your failed job records in [DynamoDB](https://aws.amazon.com/dynamodb) instead of a relational database table. However, you must manually create a DynamoDB table to store all of the failed job records. Typically, this table should be named `failed_jobs`, but you should name the table based on the value of the `queue.failed.table` configuration value within your application's `queue` configuration file.
 
 The `failed_jobs` table should have a string primary partition key named `application` and a string primary sort key named `uuid`. The `application` portion of the key will contain your application's name as defined by the `name` configuration value within your application's `app` configuration file. Since the application name is part of the DynamoDB table's key, you can use the same table to store failed jobs for multiple Laravel applications.
 
@@ -2076,6 +2199,24 @@ You may use the `assertDispatchedWithoutChain` method to assert that a job was p
 
     Bus::assertDispatchedWithoutChain(ShipOrder::class);
 
+<a name="testing-chained-batches"></a>
+#### Testing Chained Batches
+
+If your job chain [contains a batch of jobs](#chains-and-batches), you may assert that the chained batch matches your expectations by inserting a `Bus::chainedBatch` definition within your chain assertion:
+
+    use App\Jobs\ShipOrder;
+    use App\Jobs\UpdateInventory;
+    use Illuminate\Bus\PendingBatch;
+    use Illuminate\Support\Facades\Bus;
+
+    Bus::assertChained([
+        new ShipOrder,
+        Bus::chainedBatch(function (PendingBatch $batch) {
+            return $batch->jobs->count() === 3;
+        }),
+        new UpdateInventory,
+    ]);
+
 <a name="testing-job-batches"></a>
 ### Testing Job Batches
 
@@ -2092,6 +2233,14 @@ The `Bus` facade's `assertBatched` method may be used to assert that a [batch of
         return $batch->name == 'import-csv' &&
                $batch->jobs->count() === 10;
     });
+
+You may use the `assertBatchCount` method to assert that a given number of batches were dispatched:
+
+    Bus::assertBatchCount(3);
+
+You may use `assertNothingBatched` to assert that no batches were dispatched:
+
+    Bus::assertNothingBatched();
 
 <a name="testing-job-batch-interaction"></a>
 #### Testing Job / Batch Interaction

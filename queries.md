@@ -455,7 +455,7 @@ If you need to group an "or" condition within parentheses, you may pass a closur
 
     $users = DB::table('users')
                 ->where('votes', '>', 100)
-                ->orWhere(function(Builder $query) {
+                ->orWhere(function (Builder $query) {
                     $query->where('name', 'Abigail')
                           ->where('votes', '>', 50);
                 })
@@ -491,7 +491,7 @@ Laravel also supports querying JSON column types on databases that provide suppo
                     ->where('preferences->dining->meal', 'salad')
                     ->get();
 
-You may use `whereJsonContains` to query JSON arrays. This feature is not supported by SQLite database versions less than 3.38.0:
+You may use `whereJsonContains` to query JSON arrays:
 
     $users = DB::table('users')
                     ->whereJsonContains('options->languages', 'en')
@@ -1035,3 +1035,9 @@ You may use the `dd` and `dump` methods while building a query to dump the curre
     DB::table('users')->where('votes', '>', 100)->dd();
 
     DB::table('users')->where('votes', '>', 100)->dump();
+
+The `dumpRawSql` and `ddRawSql` methods may be invoked on a query to dump the query's SQL with all parameter bindings properly substituted:
+
+    DB::table('users')->where('votes', '>', 100)->dumpRawSql();
+
+    DB::table('users')->where('votes', '>', 100)->ddRawSql();

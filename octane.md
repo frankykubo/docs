@@ -3,6 +3,7 @@
 - [Introduction](#introduction)
 - [Installation](#installation)
 - [Server Prerequisites](#server-prerequisites)
+    - [FrankenPHP](#frankenphp)
     - [RoadRunner](#roadrunner)
     - [Swoole](#swoole)
 - [Serving Your Application](#serving-your-application)
@@ -26,7 +27,7 @@
 <a name="introduction"></a>
 ## Introduction
 
-[Laravel Octane](https://github.com/laravel/octane) supercharges your application's performance by serving your application using high-powered application servers, including [Open Swoole](https://openswoole.com/), [Swoole](https://github.com/swoole/swoole-src), and [RoadRunner](https://roadrunner.dev). Octane boots your application once, keeps it in memory, and then feeds it requests at supersonic speeds.
+[Laravel Octane](https://github.com/laravel/octane) supercharges your application's performance by serving your application using high-powered application servers, including [FrankenPHP](https://frankenphp.dev/), [Open Swoole](https://openswoole.com/), [Swoole](https://github.com/swoole/swoole-src), and [RoadRunner](https://roadrunner.dev). Octane boots your application once, keeps it in memory, and then feeds it requests at supersonic speeds.
 
 <a name="installation"></a>
 ## Installation
@@ -49,6 +50,43 @@ php artisan octane:install
 > **Warning**
 > Laravel Octane requires [PHP 8.1+](https://php.net/releases/).
 
+<a name="frankenphp"></a>
+### FrankenPHP
+
+> **Warning**
+> FrankenPHP's Octane integration is in beta and should be used with caution in production.
+
+[FrankenPHP](https://frankenphp.dev) is a PHP application server, written in Go, that supports modern web features like early hints and Zstandard compression. When you install Octane and choose FrankenPHP as your server, Octane will automatically download and install the FrankenPHP binary for you.
+
+<a name="frankenphp-via-laravel-sail"></a>
+#### FrankenPHP Via Laravel Sail
+
+If you plan to develop your application using [Laravel Sail](/docs/{{version}}/sail), you should run the following commands to install Octane and FrankenPHP:
+
+```shell
+./vendor/bin/sail up
+
+./vendor/bin/sail composer require laravel/octane
+```
+
+Next, you should use the `octane:install` Artisan command to install the FrankenPHP binary:
+
+```shell
+./vendor/bin/sail artisan octane:install --server=frankenphp
+```
+
+Then, you should adjust the `supervisor.conf` file used by Sail to keep your application running. To get started, execute the `sail:publish` Artisan command:
+
+```shell
+./vendor/bin/sail artisan sail:publish
+```
+
+Finally, update the `command` directive of your application's `docker/supervisord.conf` file so that Sail serves your application using Octane instead of the PHP development server:
+
+```ini
+command=/usr/bin/php -d variables_order=EGPCS /var/www/html/artisan octane:start --server=frankenphp --host=0.0.0.0 --admin-port=2019 --port=80
+```
+
 <a name="roadrunner"></a>
 ### RoadRunner
 
@@ -62,7 +100,7 @@ If you plan to develop your application using [Laravel Sail](/docs/{{version}}/s
 ```shell
 ./vendor/bin/sail up
 
-./vendor/bin/sail composer require laravel/octane spiral/roadrunner
+./vendor/bin/sail composer require laravel/octane spiral/roadrunner-cli spiral/roadrunner-http 
 ```
 
 Next, you should start a Sail shell and use the `rr` executable to retrieve the latest Linux based build of the RoadRunner binary:
@@ -178,7 +216,7 @@ By default, applications running via Octane generate links prefixed with `http:/
 > **Note**
 > If you aren't quite ready to manage your own server configuration or aren't comfortable configuring all of the various services needed to run a robust Laravel Octane application, check out [Laravel Forge](https://forge.laravel.com).
 
-In production environments, you should serve your Octane application behind a traditional web server such as a Nginx or Apache. Doing so will allow the web server to serve your static assets such as images and stylesheets, as well as manage your SSL certificate termination.
+In production environments, you should serve your Octane application behind a traditional web server such as Nginx or Apache. Doing so will allow the web server to serve your static assets such as images and stylesheets, as well as manage your SSL certificate termination.
 
 In the Nginx configuration example below, Nginx will serve the site's static assets and proxy requests to the Octane server that is running on port 8000:
 
@@ -473,8 +511,8 @@ While building your application, you should take special care to avoid creating 
 When using Swoole, you may execute operations concurrently via light-weight background tasks. You may accomplish this using Octane's `concurrently` method. You may combine this method with PHP array destructuring to retrieve the results of each operation:
 
 ```php
-use App\User;
-use App\Server;
+use App\Models\User;
+use App\Models\Server;
 use Laravel\Octane\Facades\Octane;
 
 [$users, $servers] = Octane::concurrently([

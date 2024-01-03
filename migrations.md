@@ -59,7 +59,7 @@ php artisan schema:dump
 php artisan schema:dump --prune
 ```
 
-When you execute this command, Laravel will write a "schema" file to your application's `database/schema` directory. The schema file's name will correspond to the database connection. Now, when you attempt to migrate your database and no other migrations have been executed, Laravel will execute first the SQL statements of the schema file of the database connection you are using. After executing the schema file's statements, Laravel will execute any remaining migrations that were not part of the schema dump.
+When you execute this command, Laravel will write a "schema" file to your application's `database/schema` directory. The schema file's name will correspond to the database connection. Now, when you attempt to migrate your database and no other migrations have been executed, Laravel will first execute the SQL statements in the schema file of the database connection you are using. After executing the schema file's SQL statements, Laravel will execute any remaining migrations that were not part of the schema dump.
 
 If your application's tests use a different database connection than the one you typically use during local development, you should ensure you have dumped a schema file using that database connection so that your tests are able to build your database. You may wish to do this after dumping the database connection you typically use during local development:
 
@@ -194,6 +194,12 @@ You may roll back a specific "batch" of migrations by providing the `batch` opti
  php artisan migrate:rollback --batch=3
  ```
 
+If you would like to see the SQL statements that will be executed by the migrations without actually running them, you may provide the `--pretend` flag to the `migrate:rollback` command:
+
+```shell
+php artisan migrate:rollback --pretend
+```
+
 The `migrate:reset` command will roll back all of your application's migrations:
 
 ```shell
@@ -227,6 +233,12 @@ The `migrate:fresh` command will drop all tables from the database and then exec
 php artisan migrate:fresh
 
 php artisan migrate:fresh --seed
+```
+
+By default, the `migrate:fresh` command only drops tables from the default database connection. However, you may use the `--database` option to specify the database connection that should be migrated. The database connection name should correspond to a connection defined in your application's `database` [configuration file](/docs/{{version}}/configuration):
+
+```shell
+php artisan migrate:fresh --database=admin
 ```
 
 > **Warning**  
@@ -547,7 +559,7 @@ The `foreignId` method creates an `UNSIGNED BIGINT` equivalent column:
 <a name="column-method-foreignIdFor"></a>
 #### `foreignIdFor()` {.collection-method}
 
-The `foreignIdFor` method adds a `{column}_id UNSIGNED BIGINT` equivalent column for a given model class:
+The `foreignIdFor` method adds a `{column}_id` equivalent column for a given model class. The column type will be `UNSIGNED BIGINT`, `CHAR(36)`, or `CHAR(26)` depending on the model key type:
 
     $table->foreignIdFor(User::class);
 
@@ -606,6 +618,8 @@ The `integer` method creates an `INTEGER` equivalent column:
 The `ipAddress` method creates a `VARCHAR` equivalent column:
 
     $table->ipAddress('visitor');
+    
+When using Postgres, an `INET` column will be created.
 
 <a name="column-method-json"></a>
 #### `json()` {.collection-method}
@@ -666,7 +680,7 @@ The `mediumText` method creates a `MEDIUMTEXT` equivalent column:
 <a name="column-method-morphs"></a>
 #### `morphs()` {.collection-method}
 
-The `morphs` method is a convenience method that adds a `{column}_id` `UNSIGNED BIGINT` equivalent column and a `{column}_type` `VARCHAR` equivalent column.
+The `morphs` method is a convenience method that adds a `{column}_id` equivalent column and a `{column}_type` `VARCHAR` equivalent column. The column type for the `{column}_id` will be `UNSIGNED BIGINT`, `CHAR(36)`, or `CHAR(26)` depending on the model key type.
 
 This method is intended to be used when defining the columns necessary for a polymorphic [Eloquent relationship](/docs/{{version}}/eloquent-relationships). In the following example, `taggable_id` and `taggable_type` columns would be created:
 
@@ -964,8 +978,8 @@ Modifier  |  Description
 `->storedAs($expression)`  |  Create a stored generated column (MySQL / PostgreSQL).
 `->unsigned()`  |  Set INTEGER columns as UNSIGNED (MySQL).
 `->useCurrent()`  |  Set TIMESTAMP columns to use CURRENT_TIMESTAMP as default value.
-`->useCurrentOnUpdate()`  |  Set TIMESTAMP columns to use CURRENT_TIMESTAMP when a record is updated.
-`->virtualAs($expression)`  |  Create a virtual generated column (MySQL).
+`->useCurrentOnUpdate()`  |  Set TIMESTAMP columns to use CURRENT_TIMESTAMP when a record is updated (MySQL).
+`->virtualAs($expression)`  |  Create a virtual generated column (MySQL / PostgreSQL / SQLite).
 `->generatedAs($expression)`  |  Create an identity column with specified sequence options (PostgreSQL).
 `->always()`  |  Defines the precedence of sequence values over input for an identity column (PostgreSQL).
 `->isGeometry()`  |  Set spatial column type to `geometry` - the default type is `geography` (PostgreSQL).
@@ -1212,10 +1226,12 @@ Since this syntax is rather verbose, Laravel provides additional, terser methods
         $table->foreignId('user_id')->constrained();
     });
 
-The `foreignId` method creates an `UNSIGNED BIGINT` equivalent column, while the `constrained` method will use conventions to determine the table and column name being referenced. If your table name does not match Laravel's conventions, you may specify the table name by passing it as an argument to the `constrained` method:
+The `foreignId` method creates an `UNSIGNED BIGINT` equivalent column, while the `constrained` method will use conventions to determine the table and column being referenced. If your table name does not match Laravel's conventions, you may manually provide it to the `constrained` method. In addition, the name that should be assigned to the generated index may be specified as well:
 
     Schema::table('posts', function (Blueprint $table) {
-        $table->foreignId('user_id')->constrained('users');
+        $table->foreignId('user_id')->constrained(
+            table: 'users', indexName: 'posts_user_id'
+        );
     });
 
 You may also specify the desired action for the "on delete" and "on update" properties of the constraint:
@@ -1227,13 +1243,14 @@ You may also specify the desired action for the "on delete" and "on update" prop
 
 An alternative, expressive syntax is also provided for these actions:
 
-Method  |  Description
--------  |  -----------
-`$table->cascadeOnUpdate();` | Updates should cascade.
-`$table->restrictOnUpdate();`| Updates should be restricted.
-`$table->cascadeOnDelete();` | Deletes should cascade.
-`$table->restrictOnDelete();`| Deletes should be restricted.
-`$table->nullOnDelete();`    | Deletes should set the foreign key value to null.
+| Method                        | Description                                       |
+|-------------------------------|---------------------------------------------------|
+| `$table->cascadeOnUpdate();`  | Updates should cascade.                           |
+| `$table->restrictOnUpdate();` | Updates should be restricted.                     |
+| `$table->noActionOnUpdate();` | No action on updates.                             |
+| `$table->cascadeOnDelete();`  | Deletes should cascade.                           |
+| `$table->restrictOnDelete();` | Deletes should be restricted.                     |
+| `$table->nullOnDelete();`     | Deletes should set the foreign key value to null. |
 
 Any additional [column modifiers](#column-modifiers) must be called before the `constrained` method:
 
